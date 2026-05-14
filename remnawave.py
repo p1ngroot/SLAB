@@ -13,7 +13,8 @@ class RemnawaveClient:
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
-        self.squad = "Main_sab"
+        # UUID внутреннего сквада (не имя — иначе не выдаётся)
+        self.squad_uuid = "c494ced2-8eb8-4724-85db-af1688e44259"
 
     async def _request(self, method, endpoint, json_data=None):
         async with aiohttp.ClientSession() as session:
@@ -43,12 +44,12 @@ class RemnawaveClient:
         return (datetime.utcnow() + timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
     async def create_user(self, username: str, plan_id: str = "plan_2dev_1m"):
-        """Создаёт юзера сразу с expireAt и squadName."""
+        """Создаёт юзера с expireAt и squadUuid (не squadName)."""
         endpoint = f"{self.url}/api/users"
         payload = {
             "username": username,
             "expireAt": self._expire_date(plan_id),
-            "squadName": self.squad,
+            "squadUuid": self.squad_uuid,
         }
         res, status = await self._request("POST", endpoint, payload)
 
@@ -56,6 +57,8 @@ class RemnawaveClient:
             logging.info(f"User {username} created successfully")
         elif status in (400, 409) and "already exists" in str(res):
             logging.info(f"User {username} already exists, skipping creation")
+            # Если юзер уже есть — обновляем expireAt через PATCH
+            await self.create_subscription(username, plan_id)
         else:
             logging.warning(f"create_user unexpected status {status}: {res}")
         return res, status
