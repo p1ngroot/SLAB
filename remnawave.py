@@ -4,6 +4,8 @@ from os import getenv
 from datetime import datetime, timedelta
 from keyboards import PLAN_MAP
 
+__version__ = "1.1.0"
+
 
 class RemnawaveClient:
     def __init__(self):
@@ -13,8 +15,8 @@ class RemnawaveClient:
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
-        # UUID внутреннего сквада (не имя — иначе не выдаётся)
-        self.squad_uuid = "c494ced2-8eb8-4724-85db-af1688e44259"
+        # UUID внутреннего сквада — задаётся в .env, иначе подписка создаётся без сквада
+        self.squad_uuid = getenv("REMNAWAVE_SQUAD_UUID", "")
 
     async def _request(self, method, endpoint, json_data=None):
         async with aiohttp.ClientSession() as session:
@@ -44,35 +46,37 @@ class RemnawaveClient:
         return (datetime.utcnow() + timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
     async def create_user(self, username: str, plan_id: str = "plan_2dev_1m"):
-        """Создаёт юзера с expireAt и squadUuid (не squadName)."""
+        """
+        Создаёт юзера с expireAt.
+        Если squadUuid задан в .env — добавляет его в payload.
+        При 409 (уже существует) — обновляет expireAt через PATCH.
+        """
         endpoint = f"{self.url}/api/users"
         payload = {
             "username": username,
             "expireAt": self._expire_date(plan_id),
-            "squadUuid": self.squad_uuid,
         }
+        if self.squad_uuid:
+            payload["squadUuid"] = self.squad_uuid
+
         res, status = await self._request("POST", endpoint, payload)
 
         if status in (200, 201):
             logging.info(f"User {username} created successfully")
         elif status in (400, 409) and "already exists" in str(res):
-            logging.info(f"User {username} already exists, skipping creation")
-            # Если юзер уже есть — обновляем expireAt через PATCH
-            await self.create_subscription(username, plan_id)
+            logging.info(f"User {username} already exists — updating expireAt via PATCH")
+            await self._patch_expire(username, plan_id)
         else:
             logging.warning(f"create_user unexpected status {status}: {res}")
         return res, status
 
-    async def create_subscription(self, username: str, plan_id: str):
-        """
-        В Remnawave подписка создаётся вместе с юзером.
-        Здесь обновляем дату истечения через PATCH /api/users/{shortUuid}.
-        """
+    async def _patch_expire(self, username: str, plan_id: str):
+        """Обновляет expireAt существующего юзера через PATCH /api/users/{shortUuid}."""
         res, status = await self._request(
             "GET", f"{self.url}/api/subscriptions/by-username/{username}"
         )
         if status != 200:
-            logging.warning(f"create_subscription: cannot get user info for {username}")
+            logging.warning(f"_patch_expire: cannot get user info for {username}")
             return None
 
         data = res.get("response", res)
@@ -80,7 +84,7 @@ class RemnawaveClient:
         short_uuid = user.get("shortUuid")
 
         if not short_uuid:
-            logging.warning(f"create_subscription: no shortUuid for {username}")
+            logging.warning(f"_patch_expire: no shortUuid for {username}")
             return None
 
         patch_payload = {"expireAt": self._expire_date(plan_id)}
@@ -88,7 +92,7 @@ class RemnawaveClient:
             "PATCH", f"{self.url}/api/users/{short_uuid}", patch_payload
         )
         if patch_status in (200, 201, 204):
-            logging.info(f"Subscription updated for {username} via PATCH")
+            logging.info(f"expireAt updated for {username}")
         else:
             logging.warning(f"PATCH expireAt failed ({patch_status}): {patch_res}")
         return patch_res

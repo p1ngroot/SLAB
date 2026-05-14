@@ -13,6 +13,8 @@ import keyboards as kb
 import db
 from remnawave import RemnawaveClient
 
+__version__ = "1.1.0"
+
 # --- ИНИЦИАЛИЗАЦИЯ ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -162,9 +164,10 @@ async def process_payment(message: types.Message, state: FSMContext):
 async def approve_vpn(callback: types.CallbackQuery):
     _, user_id, username, plan = callback.data.split(":")
     try:
+        # create_user сам обработает случай 409 (уже существует) и обновит expireAt
         await remna.create_user(username, plan)
-        await remna.create_subscription(username, plan)
 
+        # Получаем ссылку с retry — API может чуть задержать
         config_link = None
         for _ in range(3):
             await asyncio.sleep(2)
